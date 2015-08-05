@@ -1,0 +1,496 @@
+#! /bin/sh
+# This is a shell archive.  Remove anything before this line, then unpack
+# it by saving it into a file and typing "sh file".  To overwrite existing
+# files, type "sh file -c".  You can also feed this as standard input via
+# unshar, or by typing "sh <file", e.g..  If this archive is complete, you
+# will see the following message at the end:
+#		"End of shell archive."
+# Contents:  adaptive_model.c arithmetic_coding.h arithmetic_decode.c
+#   arithmetic_encode.c bit_input.c bit_output.c decode.c encode.c
+#   makefile model.h
+# Wrapped by ian@cpsc.ucalgary.ca on Tue May 14 21:59:24 1991
+PATH=/bin:/usr/bin:/usr/ucb ; export PATH
+if test -f 'adaptive_model.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'adaptive_model.c'\"
+else
+echo shar: Extracting \"'adaptive_model.c'\" \(1963 characters\)
+sed "s/^X//" >'adaptive_model.c' <<'END_OF_FILE'
+X/* THE ADAPTIVE SOURCE MODEL */
+X
+X#include "model.h"
+X
+Xint freq[No_of_symbols+1];	/* Symbol frequencies                       */
+X
+X
+X/* INITIALIZE THE MODEL. */
+X
+Xstart_model()
+X{   int i;
+X    for (i = 0; i<No_of_chars; i++) {		/* Set up tables that       */
+X        char_to_index[i] = i+1;			/* translate between symbol */
+X        index_to_char[i+1] = i;			/* indexes and characters.  */
+X    }
+X    for (i = 0; i<=No_of_symbols; i++) {	/* Set up initial frequency */
+X        freq[i] = 1;				/* counts to be one for all */
+X        cum_freq[i] = No_of_symbols-i;		/* symbols.                 */
+X    }
+X    freq[0] = 0;				/* Freq[0] must not be the  */
+X}						/* same as freq[1].         */
+X
+X
+X/* UPDATE THE MODEL TO ACCOUNT FOR A NEW SYMBOL. */
+X
+Xupdate_model(symbol)
+X    int symbol;			/* Index of new symbol                      */
+X{   int i;			/* New index for symbol                     */
+X    if (cum_freq[0]==Max_frequency) {		/* See if frequency counts  */
+X        int cum;				/* are at their maximum.    */
+X        cum = 0;
+X        for (i = No_of_symbols; i>=0; i--) {	/* If so, halve all the     */
+X            freq[i] = (freq[i]+1)/2;		/* counts (keeping them     */
+X            cum_freq[i] = cum; 			/* non-zero).               */
+X            cum += freq[i];
+X        }
+X    }
+X    for (i = symbol; freq[i]==freq[i-1]; i--) ;	/* Find symbol's new index. */
+X    if (i<symbol) {
+X        int ch_i, ch_symbol;
+X        ch_i = index_to_char[i];		/* Update the translation   */
+X        ch_symbol = index_to_char[symbol];	/* tables if the symbol has */
+X        index_to_char[i] = ch_symbol;           /* moved.                   */
+X        index_to_char[symbol] = ch_i;
+X        char_to_index[ch_i] = symbol;
+X        char_to_index[ch_symbol] = i;
+X    }
+X    freq[i] += 1;				/* Increment the frequency  */
+X    while (i>0) {				/* count for the symbol and */
+X        i -= 1;					/* update the cumulative    */
+X        cum_freq[i] += 1;			/* frequencies.             */
+X    }
+X}
+END_OF_FILE
+if test 1963 -ne `wc -c <'adaptive_model.c'`; then
+    echo shar: \"'adaptive_model.c'\" unpacked with wrong size!
+fi
+# end of 'adaptive_model.c'
+fi
+if test -f 'arithmetic_coding.h' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'arithmetic_coding.h'\"
+else
+echo shar: Extracting \"'arithmetic_coding.h'\" \(586 characters\)
+sed "s/^X//" >'arithmetic_coding.h' <<'END_OF_FILE'
+X/* DECLARATIONS USED FOR ARITHMETIC ENCODING AND DECODING */
+X
+X
+X/* SIZE OF ARITHMETIC CODE VALUES. */
+X
+X#define Code_value_bits 16		/* Number of bits in a code value   */
+Xtypedef long code_value;		/* Type of an arithmetic code value */
+X
+X#define Top_value (((long)1<<Code_value_bits)-1)      /* Largest code value */
+X
+X
+X/* HALF AND QUARTER POINTS IN THE CODE VALUE RANGE. */
+X
+X#define First_qtr (Top_value/4+1)	/* Point after first quarter        */
+X#define Half	  (2*First_qtr)		/* Point after first half           */
+X#define Third_qtr (3*First_qtr)		/* Point after third quarter        */
+END_OF_FILE
+if test 586 -ne `wc -c <'arithmetic_coding.h'`; then
+    echo shar: \"'arithmetic_coding.h'\" unpacked with wrong size!
+fi
+# end of 'arithmetic_coding.h'
+fi
+if test -f 'arithmetic_decode.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'arithmetic_decode.c'\"
+else
+echo shar: Extracting \"'arithmetic_decode.c'\" \(2117 characters\)
+sed "s/^X//" >'arithmetic_decode.c' <<'END_OF_FILE'
+X/* ARITHMETIC DECODING ALGORITHM. */
+X
+X#include "arithmetic_coding.h"
+X
+X
+X/* CURRENT STATE OF THE DECODING. */
+X
+Xstatic code_value value;	/* Currently-seen code value                */
+Xstatic code_value low, high;	/* Ends of current code region              */
+X
+X
+X/* START DECODING A STREAM OF SYMBOLS. */
+X
+Xstart_decoding()
+X{   int i;
+X    value = 0;					/* Input bits to fill the   */
+X    for (i = 1; i<=Code_value_bits; i++) {	/* code value.              */
+X        value = 2*value+input_bit();
+X    }
+X    low = 0;					/* Full code range.         */
+X    high = Top_value;
+X}
+X
+X
+X/* DECODE THE NEXT SYMBOL. */
+X
+Xint decode_symbol(cum_freq)
+X    int cum_freq[];		/* Cumulative symbol frequencies            */
+X{   long range;			/* Size of current code region              */
+X    int cum;			/* Cumulative frequency calculated          */
+X    int symbol;			/* Symbol decoded                           */
+X    range = (long)(high-low)+1;
+X    cum = 					/* Find cum freq for value. */
+X      (((long)(value-low)+1)*cum_freq[0]-1)/range;
+X    for (symbol = 1; cum_freq[symbol]>cum; symbol++) ; /* Then find symbol. */
+X    high = low +				/* Narrow the code region   */
+X      (range*cum_freq[symbol-1])/cum_freq[0]-1;	/* to that allotted to this */
+X    low = low + 				/* symbol.                  */
+X      (range*cum_freq[symbol])/cum_freq[0];
+X    for (;;) {					/* Loop to get rid of bits. */
+X        if (high<Half) {
+X            /* nothing */			/* Expand low half.         */
+X        } 
+X        else if (low>=Half) {			/* Expand high half.        */
+X            value -= Half;
+X            low -= Half;			/* Subtract offset to top.  */
+X            high -= Half;
+X        }
+X        else if (low>=First_qtr			/* Expand middle half.      */
+X              && high<Third_qtr) {
+X            value -= First_qtr;
+X            low -= First_qtr;			/* Subtract offset to middle*/
+X            high -= First_qtr;
+X        }
+X        else break;				/* Otherwise exit loop.     */
+X        low = 2*low;
+X        high = 2*high+1;			/* Scale up code range.     */
+X        value = 2*value+input_bit();		/* Move in next input bit.  */
+X    }
+X    return symbol;
+X}
+END_OF_FILE
+if test 2117 -ne `wc -c <'arithmetic_decode.c'`; then
+    echo shar: \"'arithmetic_decode.c'\" unpacked with wrong size!
+fi
+# end of 'arithmetic_decode.c'
+fi
+if test -f 'arithmetic_encode.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'arithmetic_encode.c'\"
+else
+echo shar: Extracting \"'arithmetic_encode.c'\" \(2477 characters\)
+sed "s/^X//" >'arithmetic_encode.c' <<'END_OF_FILE'
+X/* ARITHMETIC ENCODING ALGORITHM. */
+X
+X#include "arithmetic_coding.h"
+X
+Xstatic void bit_plus_follow();	/* Routine that follows                     */
+X
+X
+X/* CURRENT STATE OF THE ENCODING. */
+X
+Xstatic code_value low, high;	/* Ends of the current code region          */
+Xstatic long bits_to_follow;	/* Number of opposite bits to output after  */
+X				/* the next bit.                            */
+X
+X
+X/* START ENCODING A STREAM OF SYMBOLS. */
+X
+Xstart_encoding()
+X{   low = 0;					/* Full code range.         */
+X    high = Top_value;
+X    bits_to_follow = 0;				/* No bits to follow next.  */
+X}
+X
+X
+X/* ENCODE A SYMBOL. */
+X
+Xencode_symbol(symbol,cum_freq)
+X    int symbol;			/* Symbol to encode                         */
+X    int cum_freq[];		/* Cumulative symbol frequencies            */
+X{   long range;			/* Size of the current code region          */
+X    range = (long)(high-low)+1;
+X    high = low +				/* Narrow the code region   */
+X      (range*cum_freq[symbol-1])/cum_freq[0]-1;	/* to that allotted to this */
+X    low = low + 				/* symbol.                  */
+X      (range*cum_freq[symbol])/cum_freq[0];
+X    for (;;) {					/* Loop to output bits.     */
+X        if (high<Half) {
+X            bit_plus_follow(0);			/* Output 0 if in low half. */
+X        } 
+X        else if (low>=Half) {			/* Output 1 if in high half.*/
+X            bit_plus_follow(1);
+X            low -= Half;
+X            high -= Half;			/* Subtract offset to top.  */
+X        }
+X        else if (low>=First_qtr			/* Output an opposite bit   */
+X              && high<Third_qtr) {		/* later if in middle half. */
+X            bits_to_follow += 1;
+X            low -= First_qtr;			/* Subtract offset to middle*/
+X            high -= First_qtr;
+X        }
+X        else break;				/* Otherwise exit loop.     */
+X        low = 2*low;
+X        high = 2*high+1;			/* Scale up code range.     */
+X    }
+X}
+X
+X
+X/* FINISH ENCODING THE STREAM. */
+X
+Xdone_encoding()
+X{   bits_to_follow += 1;			/* Output two bits that     */
+X    if (low<First_qtr) bit_plus_follow(0);	/* select the quarter that  */
+X    else bit_plus_follow(1);			/* the current code range   */
+X}						/* contains.                */
+X
+X
+X/* OUTPUT BITS PLUS FOLLOWING OPPOSITE BITS. */
+X
+Xstatic void bit_plus_follow(bit)
+X    int bit;
+X{   output_bit(bit);				/* Output the bit.          */
+X    while (bits_to_follow>0) {
+X        output_bit(!bit);			/* Output bits_to_follow    */
+X        bits_to_follow -= 1;			/* opposite bits. Set       */
+X    }						/* bits_to_follow to zero.  */
+X}
+END_OF_FILE
+if test 2477 -ne `wc -c <'arithmetic_encode.c'`; then
+    echo shar: \"'arithmetic_encode.c'\" unpacked with wrong size!
+fi
+# end of 'arithmetic_encode.c'
+fi
+if test -f 'bit_input.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'bit_input.c'\"
+else
+echo shar: Extracting \"'bit_input.c'\" \(1117 characters\)
+sed "s/^X//" >'bit_input.c' <<'END_OF_FILE'
+X/* BIT INPUT ROUTINES. */
+X
+X#include <stdio.h>
+X#include "arithmetic_coding.h"
+X
+X
+X/* THE BIT BUFFER. */
+X
+Xstatic int buffer;		/* Bits waiting to be input                 */
+Xstatic int bits_to_go;		/* Number of bits still in buffer           */
+Xstatic int garbage_bits;	/* Number of bits past end-of-file          */
+X
+X
+X/* INITIALIZE BIT INPUT. */
+X
+Xstart_inputing_bits()
+X{   bits_to_go = 0;				/* Buffer starts out with   */
+X    garbage_bits = 0;				/* no bits in it.           */
+X}
+X
+X
+X/* INPUT A BIT. */
+X
+Xint input_bit()
+X{   int t;
+X    if (bits_to_go==0) {			/* Read the next byte if no */
+X        buffer = getc(stdin);			/* bits are left in buffer. */
+X        if (buffer==EOF) {
+X            garbage_bits += 1;			    /* Return arbitrary bits*/
+X            if (garbage_bits>Code_value_bits-2) {   /* after eof, but check */
+X                fprintf(stderr,"Bad input file\n"); /* for too many such.   */
+X                exit(-1);
+X            }
+X        }
+X        bits_to_go = 8;
+X    }
+X    t = buffer&1;				/* Return the next bit from */
+X    buffer >>= 1;				/* the bottom of the byte.  */
+X    bits_to_go -= 1;
+X    return t;
+X}
+END_OF_FILE
+if test 1117 -ne `wc -c <'bit_input.c'`; then
+    echo shar: \"'bit_input.c'\" unpacked with wrong size!
+fi
+# end of 'bit_input.c'
+fi
+if test -f 'bit_output.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'bit_output.c'\"
+else
+echo shar: Extracting \"'bit_output.c'\" \(769 characters\)
+sed "s/^X//" >'bit_output.c' <<'END_OF_FILE'
+X/* BIT OUTPUT ROUTINES. */
+X
+X#include <stdio.h>
+X
+X
+X/* THE BIT BUFFER. */
+X
+Xstatic int buffer;		/* Bits buffered for output                 */
+Xstatic int bits_to_go;		/* Number of bits free in buffer            */
+X
+X
+X/* INITIALIZE FOR BIT OUTPUT. */
+X
+Xstart_outputing_bits()
+X{   buffer = 0;					/* Buffer is empty to start */
+X    bits_to_go= 8;				/* with.                    */
+X}
+X
+X
+X/* OUTPUT A BIT. */
+X
+Xoutput_bit(bit)
+X    int bit;
+X{   buffer >>= 1; if (bit) buffer |= 0x80;	/* Put bit in top of buffer.*/
+X    bits_to_go -= 1;
+X    if (bits_to_go==0) {			/* Output buffer if it is   */
+X        putc(buffer,stdout);			/* now full.                */
+X        bits_to_go = 8;
+X    }
+X}
+X
+X
+X/* FLUSH OUT THE LAST BITS. */
+X
+Xdone_outputing_bits()
+X{   putc(buffer>>bits_to_go,stdout);
+X}
+END_OF_FILE
+if test 769 -ne `wc -c <'bit_output.c'`; then
+    echo shar: \"'bit_output.c'\" unpacked with wrong size!
+fi
+# end of 'bit_output.c'
+fi
+if test -f 'decode.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'decode.c'\"
+else
+echo shar: Extracting \"'decode.c'\" \(614 characters\)
+sed "s/^X//" >'decode.c' <<'END_OF_FILE'
+X/* MAIN PROGRAM FOR DECODING. */
+X
+X#include <stdio.h>
+X#include "model.h"
+X
+Xmain()
+X{   start_model();				/* Set up other modules.    */
+X    start_inputing_bits();
+X    start_decoding();
+X    for (;;) {					/* Loop through characters. */
+X        int ch; int symbol;
+X        symbol = decode_symbol(cum_freq);	/* Decode next symbol.      */
+X        if (symbol==EOF_symbol) break;		/* Exit loop if EOF symbol. */
+X        ch = index_to_char[symbol];		/* Translate to a character.*/
+X        putc(ch,stdout);			/* Write that character.    */
+X        update_model(symbol);			/* Update the model.        */
+X    }
+X    exit(0);
+X}
+END_OF_FILE
+if test 614 -ne `wc -c <'decode.c'`; then
+    echo shar: \"'decode.c'\" unpacked with wrong size!
+fi
+# end of 'decode.c'
+fi
+if test -f 'encode.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'encode.c'\"
+else
+echo shar: Extracting \"'encode.c'\" \(759 characters\)
+sed "s/^X//" >'encode.c' <<'END_OF_FILE'
+X/* MAIN PROGRAM FOR ENCODING. */
+X
+X#include <stdio.h>
+X#include "model.h"
+X
+Xmain()
+X{   start_model();				/* Set up other modules.    */
+X    start_outputing_bits();
+X    start_encoding();
+X    for (;;) {					/* Loop through characters. */
+X        int ch; int symbol;
+X        ch = getc(stdin);			/* Read the next character. */
+X        if (ch==EOF) break;			/* Exit loop on end-of-file.*/
+X        symbol = char_to_index[ch];		/* Translate to an index.   */
+X        encode_symbol(symbol,cum_freq);		/* Encode that symbol.      */
+X        update_model(symbol);			/* Update the model.        */
+X    }
+X    encode_symbol(EOF_symbol,cum_freq);		/* Encode the EOF symbol.   */
+X    done_encoding();				/* Send the last few bits.  */
+X    done_outputing_bits();
+X    exit(0);
+X}
+END_OF_FILE
+if test 759 -ne `wc -c <'encode.c'`; then
+    echo shar: \"'encode.c'\" unpacked with wrong size!
+fi
+# end of 'encode.c'
+fi
+if test -f 'makefile' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'makefile'\"
+else
+echo shar: Extracting \"'makefile'\" \(699 characters\)
+sed "s/^X//" >'makefile' <<'END_OF_FILE'
+XCFLAGS = -O
+X
+Xall:		adaptive
+X
+Xadaptive:		adaptive_encode adaptive_decode
+X
+Xadaptive_encode:	encode.o adaptive_model.o bit_output.o \
+X			  arithmetic_encode.o
+X			cc encode.o adaptive_model.o bit_output.o \
+X			  arithmetic_encode.o -o adaptive_encode
+X
+Xadaptive_decode:	decode.o adaptive_model.o bit_input.o \
+X			  arithmetic_decode.o
+X			cc decode.o adaptive_model.o bit_input.o \
+X			  arithmetic_decode.o -o adaptive_decode
+X
+Xencode.o:		encode.c model.h
+Xdecode.o:		decode.c model.h
+X
+Xadaptive_model.o:	adaptive_model.c model.h
+X
+Xarithmetic_encode.o:	arithmetic_encode.c arithmetic_coding.h
+Xarithmetic_decode.o:	arithmetic_decode.c arithmetic_coding.h
+X
+Xbit_input.o:		bit_input.c
+Xbit_output.o:		bit_output.c
+END_OF_FILE
+if test 699 -ne `wc -c <'makefile'`; then
+    echo shar: \"'makefile'\" unpacked with wrong size!
+fi
+# end of 'makefile'
+fi
+if test -f 'model.h' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'model.h'\"
+else
+echo shar: Extracting \"'model.h'\" \(691 characters\)
+sed "s/^X//" >'model.h' <<'END_OF_FILE'
+X/* INTERFACE TO THE MODEL. */
+X
+X
+X/* THE SET OF SYMBOLS THAT MAY BE ENCODED. */
+X
+X#define No_of_chars 256			/* Number of character symbols      */
+X#define EOF_symbol (No_of_chars+1)	/* Index of EOF symbol              */
+X
+X#define No_of_symbols (No_of_chars+1)	/* Total number of symbols          */
+X
+X
+X/* TRANSLATION TABLES BETWEEN CHARACTERS AND SYMBOL INDEXES. */
+X
+Xint char_to_index[No_of_chars];		/* To index from character          */
+Xunsigned char index_to_char[No_of_symbols+1]; /* To character from index    */
+X
+X
+X/* CUMULATIVE FREQUENCY TABLE. */
+X
+X#define Max_frequency 16383		/* Maximum allowed frequency count  */
+X
+Xint cum_freq[No_of_symbols+1];		/* Cumulative symbol frequencies    */
+END_OF_FILE
+if test 691 -ne `wc -c <'model.h'`; then
+    echo shar: \"'model.h'\" unpacked with wrong size!
+fi
+# end of 'model.h'
+fi
+echo shar: End of shell archive.
+exit 0

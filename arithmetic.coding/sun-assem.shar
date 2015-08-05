@@ -1,0 +1,1216 @@
+#! /bin/sh
+# This is a shell archive.  Remove anything before this line, then unpack
+# it by saving it into a file and typing "sh file".  To overwrite existing
+# files, type "sh file -c".  You can also feed this as standard input via
+# unshar, or by typing "sh <file", e.g..  If this archive is complete, you
+# will see the following message at the end:
+#		"End of shell archive."
+# Contents:  decode.s driver.c encode.s makefile
+# Wrapped by ian@cpsc.ucalgary.ca on Tue May 14 21:51:37 1991
+PATH=/bin:/usr/bin:/usr/ucb ; export PATH
+if test -f 'decode.s' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'decode.s'\"
+else
+echo shar: Extracting \"'decode.s'\" \(9470 characters\)
+sed "s/^X//" >'decode.s' <<'END_OF_FILE'
+X| ADAPTIVE ARITHMETIC DECODING.
+X|
+X| (C) Copyright 1987, Radford Neal. 
+X|
+X|  Permission is granted to use this program for research purposes. Please
+X|  note that this code was written to provide performance figures. I am
+X|  well aware that it is not documented to the standards of production
+X|  code. You're on your own.
+X|
+X| Global register usage:
+X|
+X|   d2w:  Bit buffer
+X|   d3w:  Low bound
+X|   d4w:  High bound
+X|   d5w:  Symbol index (times two)
+X|   d6w:  Code value
+X|
+X|   a2:  Output buffer pointer
+X|   a3:  Input buffer pointer
+X|   a4:  Input buffer limit
+X|   a6:  Constant address cumf
+X
+X	.globl	_start
+X	.globl	_read
+X	.globl	_write
+X
+X
+X| SOURCE SYMBOLS.
+X
+X	.data
+X
+Xnsym	=	257		| Number of symbols
+XEOF	=	256		| EOF symbol
+X
+X	.lcomm	itoc,2*256	| Index to character table
+X	.lcomm	ctoi,2*256	| Character to index table
+X
+X
+X| FREQUENCY TABLES.
+X
+Xmaxf	=	0x3fff		| Maximum frequency allowed
+X
+X	.lcomm	cumf,2*(nsym+1)	| Cumumlative frequency
+X	.lcomm	freq,2*(nsym+1)	| Frequencies
+X
+X
+X| IO BUFFERS.
+X
+Xbufsize	=	10240
+X
+X	.lcomm	obuf,bufsize	| Output buffer
+X	.lcomm	ibuf,bufsize	| Input buffer
+X
+X
+X| START OF PROGRAM.
+X
+X	.text
+X
+X_start:
+X	moveml	a2-a6/d2-d7,sp@-
+X
+X| INITIALIZATION.
+X
+Xinit:
+X	lea	cumf,a6		| a6 is always cumf
+X
+X	lea	obuf,a2		| Set up output buffer pointer
+X	lea	ibuf,a3		| Read first block
+X	movel	#bufsize,sp@-
+X	movel	a3,sp@-
+X	movel	#0,sp@-
+X	jsr	_read
+X	addl	#12,sp
+X	lea	a3@(0,d0:l),a4
+X	movew	a3@+,d6		| Get initial code value
+X
+X	movel	#0x80000000,d2	| Set up empty input buffer
+X
+X	lea	itoc,a0		| Set up translation tables
+X	lea	ctoi,a1
+X	movew	#2*255,d0
+Xinit1:	movew	d0,a0@(0,d0:w)
+X	movew	d0,a1@(0,d0:w)
+X	subqw	#2,d0
+X	bge	init1
+X
+X	movew	#nsym-1,d0	| Set up frequency tables
+X	movew	#2*(nsym-1),d1
+X	lea	freq,a0
+Xinit2:	movew	#1,a0@(2,d1:w)
+X	movew	#nsym-1,a6@(2,d1:w)
+X	subw	d0,a6@(2,d1:w)
+X	subqw	#2,d1
+X	subqw	#1,d0
+X	bge	init2
+X
+X	clrw	a0@		| Make frequency for total different
+X	movew	#nsym,a6@	| Set total frequency
+X
+X	clrw	d3		| Set low bound
+X	movew	#0xffff,d4	| Set high bound
+X
+X
+X| DECODE NEXT SYMBOL AND UPDATE BOUNDS.
+X
+Xmain_loop:
+X	movew	d4,d0		| Find size of range
+X	subw	d3,d0
+X
+X	movew	d3,d4		| Start computation of high
+X	subqw	#1,d4
+X	movew	a6@,d1		| d1 is total frequency
+X
+X	addqw	#1,d0		| Complete range calculation
+X	bne	nfind		| Check for special overflow case
+X
+Xzfind:	movew	d6,d7		| Special overflow case
+X	subw	d3,d7
+X	addqw	#1,d7
+X	beq	zzfind		| Check for double overflow case
+X	mulu	d1,d7
+X	subl	#1,d7
+X	swap	d7
+X	bra	find0
+Xzzfind:	movew	d1,d7		| Double overflow case
+X	subqw	#1,d7
+X	bra	find0
+X
+Xnfind:	movew	d6,d7		| Find value-low+1
+X	subw	d3,d7
+X	addqw	#1,d7
+X	mulu	d1,d7		| Compute cum freq seen
+X	subl	#1,d7
+X	divu	d0,d7
+X
+Xfind0:	lea	a6@(2),a0	| Find symbol containing that cum freq
+Xfind1:	cmpw	a0@+,d7
+X	bge	find2
+X	cmpw	a0@+,d7
+X	bge	find2
+X	cmpw	a0@+,d7
+X	bge	find2
+X	cmpw	a0@+,d7
+X	blt	find1
+Xfind2:	movew	a0,d5
+X	subw	a6,d5
+X	subqw	#4,d5
+X
+X	cmpw	#2*EOF,d5	| Check for end of file
+X	beq	finish
+X
+X	lea	itoc,a0		| Output character decoded
+X	movew	a0@(0,d5:w),d7
+X	asrw	#1,d7
+X	moveb	d7,a2@+
+X	lea	obuf+bufsize,a0
+X	cmpl	a0,a2
+X	bne	bounds
+X	lea	obuf,a2		| Reset buffer
+X	moveml	d0/d1,sp@-
+X	movel	#bufsize,sp@-	| Write buffer
+X	movel	a2,sp@-
+X	movel	#1,sp@-
+X	jsr	_write
+X	addl	#12,sp
+X	moveml	sp@+,d0/d1
+X
+Xbounds:	tstw	d0		| Check for special case
+X	bne	nbounds
+X
+Xzbounds:clrl	d7		| Special case of multiply by 0x10000
+X	movew	a6@(2,d5:w),d7
+X	swap	d7
+X	divu	d1,d7
+X	addw	d7,d3
+X	clrl	d7
+X	movew	a6@(0,d5:w),d7
+X	swap	d7
+X	divu	d1,d7
+X	addw	d7,d4
+X
+X	bra	input
+X
+Xnbounds:movew	a6@(2,d5:w),d7	| Compute new low
+X	mulu	d0,d7
+X	divu	d1,d7
+X	addw	d7,d3
+X
+X	movew	a6@(0,d5:w),d7	| Compute new high
+X	mulu	d0,d7
+X	divu	d1,d7
+X	addw	d7,d4
+X
+X
+X| INPUT BITS.
+X
+Xinput:
+X	tstw	d3		| See if one was output
+X	bmi	input1
+X	tstw	d4		| See if zero was output
+X	bpl	input1
+X	bra	input4
+X	
+Xinputx:	cmpl	a4,a3		| See if new block needed
+X	blt	input2
+X	lea	ibuf,a3		| Read next block
+X	movel	#bufsize,sp@-
+X	movel	a3,sp@-
+X	movel	#0,sp@-
+X	jsr	_read
+X	addl	#12,sp
+X	lea	a3@(0,d0:l),a4
+Xinput2:	movew	a3@+,d2		| Get next word
+X	swap	d2
+X	movew	#0x8000,d2
+X	bra	input1
+X
+Xinput0:	addw	d4,d4		| Scale up high
+X	addqw	#1,d4
+X
+Xinput1:	addl	d2,d2		| Shift out next input bit
+X	beq	inputx		| See if new word needed
+X	addxw	d6,d6		| Shift in bit
+X
+Xinput3:	addw	d3,d3		| Scale up low
+X	bmi	input0		| See if one was output
+X	addw	d4,d4		| Scale up high
+X	addqw	#1,d4
+X	bpl	input1		| See if zero was output
+X
+Xinput4:	cmpw	#0xc000,d4	| See if "middle" was output
+X	bge	update
+X	movew	#0x4000,d0
+X	cmpw	d0,d3
+X	blt	update
+X
+X	subw	d0,d3		| Subtract 1/4 from low, high, and value
+X	subw	d0,d4
+X	subw	d0,d6
+X	bra	input1
+X
+X
+X| UPDATE THE MODEL.
+X
+Xupdate0:clrw	d0		| Clear new cumulative count
+X	lea	freq,a1
+X	lea	a1@(2*(nsym+1)),a0 | Pointer for scanning frequencies
+Xupdate1:movew	a0@-,d1		| Scale frequency
+X	addqw	#1,d1
+X	asrw	#1,d1
+X	movew	d1,a0@
+X	movew	d0,a0@(cumf-freq)| Set cumulative frequency
+X	addw	d1,d0		| Add to cumulative frequency
+X	cmpl	a0,a1
+X	bne	update1
+X	bra	update2
+X
+Xupdate:	
+X	cmpw	#maxf,a6@	| See if counts must be scaled down
+X	beq	update0
+X
+Xupdate2:lea	freq,a1		| a1 = freq+d5 for awhile
+X	addw	d5,a1
+X	movew	a1@+,d0
+X	cmpw	a1@,d0		| See if symbol must move
+X	bne	update4
+X
+X	movew	d5,d7		| Find new index for symbol
+Xupdate3:subqw	#2,d5
+X	movew	a1@-,d0
+X	cmpw	a1@(-2),d0
+X	beq	update3
+X
+X	lea	itoc,a0		| Exchange symbols
+X	movew	a0@(0,d7:w),d0
+X	movew	a0@(0,d5:w),d1
+X	movew	d0,a0@(0,d5:w)
+X	movew	d1,a0@(0,d7:w)
+X	lea	ctoi,a0
+X	movew	d5,a0@(0,d0:w)
+X	movew	d7,a0@(0,d1:w)
+X
+Xupdate4:addqw	#1,a1@		| Update frequency
+X
+X	movel	a6,a0
+X	lea	update5,a1
+X	subw	d5,a1
+X	jmp	a1@
+X
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X
+Xupdate5:addqw	#1,a0@
+X
+X	bra	main_loop
+X
+X
+X| FINISH WITH STUFF.
+X
+Xfinish:
+X	lea	obuf,a0		| Write buffer
+X	subl	a0,a2
+X	movel	a2,sp@-
+X	movel	a0,sp@-
+X	movel	#1,sp@-
+X	jsr	_write
+X	addl	#12,sp
+X
+X	moveml	sp@+,a2-a6/d2-d7
+X	rts
+END_OF_FILE
+if test 9470 -ne `wc -c <'decode.s'`; then
+    echo shar: \"'decode.s'\" unpacked with wrong size!
+fi
+# end of 'decode.s'
+fi
+if test -f 'driver.c' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'driver.c'\"
+else
+echo shar: Extracting \"'driver.c'\" \(40 characters\)
+sed "s/^X//" >'driver.c' <<'END_OF_FILE'
+X#include <stdio.h>
+X
+Xmain()
+X{ start();
+X}
+END_OF_FILE
+if test 40 -ne `wc -c <'driver.c'`; then
+    echo shar: \"'driver.c'\" unpacked with wrong size!
+fi
+# end of 'driver.c'
+fi
+if test -f 'encode.s' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'encode.s'\"
+else
+echo shar: Extracting \"'encode.s'\" \(9807 characters\)
+sed "s/^X//" >'encode.s' <<'END_OF_FILE'
+X| ADAPTIVE ARITHMETIC CODING.
+X|
+X| (C) Copyright 1987, Radford Neal. 
+X|
+X|  Permission is granted to use this program for research purposes. Please
+X|  note that this code was written to provide performance figures. I am
+X|  well aware that it is not documented to the standards of production
+X|  code. You're on your own.
+X|
+X| Global register usage:
+X|
+X|   d2w:  Bit buffer
+X|   d3w:  Low bound
+X|   d4w:  High bound
+X|   d5w:  Symbol index (times two)
+X|   d6l:  Bits to follow
+X|
+X|   a2:  Output buffer pointer
+X|   a3:  Input buffer pointer
+X|   a4:  Input buffer limit
+X|   a6:  Constant address cumf
+X
+X	.globl	_start
+X	.globl	_read
+X	.globl	_write
+X
+X
+X| SOURCE SYMBOLS.
+X
+X	.data
+X
+Xnsym	=	257		| Number of symbols
+XEOF	=	256		| EOF symbol
+X
+X	.lcomm	itoc,2*256	| Index to character table
+X	.lcomm	ctoi,2*256	| Character to index table
+X
+X
+X| FREQUENCY TABLES.
+X
+Xmaxf	=	0x3fff		| Maximum frequency allowed
+X
+X	.lcomm	cumf,2*(nsym+1)	| Cumumlative frequency
+X	.lcomm	freq,2*(nsym+1)	| Frequencies
+X
+X
+X| IO BUFFERS.
+X
+Xbufsize	=	10240
+X
+X	.lcomm	obuf,bufsize	| Output buffer
+X	.lcomm	ibuf,bufsize	| Input buffer
+X
+X
+X| START OF PROGRAM.
+X
+X	.text
+X
+X_start:
+X	moveml	a2-a6/d2-d7,sp@-
+X
+X| INITIALIZATION.
+X
+Xinit:
+X	lea	cumf,a6		| a6 is always cumf
+X
+X	lea	obuf,a2		| Set up buffers
+X	movew	#1,d2
+X
+X	lea	itoc,a0		| Set up translation tables
+X	lea	ctoi,a1
+X	movew	#2*255,d0
+Xinit1:	movew	d0,a0@(0,d0:w)
+X	movew	d0,a1@(0,d0:w)
+X	subqw	#2,d0
+X	bge	init1
+X
+X	movew	#nsym-1,d0	| Set up frequency tables
+X	movew	#2*(nsym-1),d1
+X	lea	freq,a0
+Xinit2:	movew	#1,a0@(2,d1:w)
+X	movew	#nsym-1,a6@(2,d1:w)
+X	subw	d0,a6@(2,d1:w)
+X	subqw	#2,d1
+X	subqw	#1,d0
+X	bge	init2
+X
+X	clrw	a0@		| Make frequency for total different
+X	movew	#nsym,a6@	| Set total frequency
+X
+X	clrw	d3		| Set low bound
+X	movew	#0xffff,d4	| Set high bound
+X	clrl	d6		| No bits following yet
+X
+X
+X| GET NEXT SYMBOL.
+X
+Xreadb:	lea	ibuf,a3		| Read next block
+X	movel	#bufsize,sp@-
+X	movel	a3,sp@-
+X	movel	#0,sp@-
+X	jsr	_read
+X	addl	#12,sp
+X	lea	a3@(0,d0:l),a4
+X	tstl	d0		| Check for EOF
+X	bgt	main_loop
+X	movew	#2*EOF,d5	| Return EOF symbol
+X	bra	bounds
+X
+Xmain_loop:
+X
+X	cmpl	a3,a4		| See if input buffer empty
+X	ble	readb
+X	clrw	d0		| Get byte from buffer
+X	moveb	a3@+,d0
+X	addw	d0,d0
+X	lea	ctoi,a0
+X	movew	a0@(0,d0:w),d5	| Translate to symbol
+X
+X
+X| UPDATE BOUNDS.
+X
+Xbounds:	
+X	movew	d4,d0		| Find size of range
+X	subw	d3,d0
+X
+X	movew	d3,d4		| Start computation of high
+X	subqw	#1,d4
+X	movew	a6@,d1		| d1 is total frequency
+X
+X	addqw	#1,d0		| Complete range calculation
+X	beq	zbounds		| Check for special overflow case
+X
+X	movew	a6@(2,d5:w),d7	| Compute new low
+X	mulu	d0,d7
+X	divu	d1,d7
+X	addw	d7,d3
+X
+X	movew	a6@(0,d5:w),d7	| Compute new high
+X	mulu	d0,d7
+X	divu	d1,d7
+X	addw	d7,d4
+X
+X	bra	output
+X
+Xzbounds:clrl	d7		| Special case of multiply by 0x10000
+X	movew	a6@(2,d5:w),d7
+X	swap	d7
+X	divu	d1,d7
+X	addw	d7,d3
+X	clrl	d7
+X	movew	a6@(0,d5:w),d7
+X	swap	d7
+X	divu	d1,d7
+X	addw	d7,d4
+X	bra	output
+X
+X
+X| OUTPUT BITS.
+X
+Xputb:	movew	d2,a2@+	| Put word in buffer
+X	lea	obuf+bufsize,a0	| Check for output buffer full
+X	cmpl	a2,a0
+X	bne	putb1
+X	lea	obuf,a2		| Reset buffer
+X	movel	#bufsize,sp@-	| Write buffer
+X	movel	a2,sp@-
+X	movel	#1,sp@-
+X	jsr	_write
+X	addl	#12,sp
+Xputb1:	movew	#1,d2		| Reset bit buffer
+X	rts
+X
+Xoutput:
+X	moveq	#0x10,d7		| d7 = 0x10 for awhile
+X	tstw	d3		| See if one should be output
+X	bmi	output4
+X	tstw	d4		| See if zero should be output
+X	bmi	output2
+X
+Xoutput0:addw	d2,d2		| Put zero in buffer
+X	bcc	x1
+X	bra	x2
+Xx3:	subl	#1,d6
+X	movew	d7,cc		| Put one in buffer
+X	addxw	d2,d2
+X	bcc	x1
+Xx2:	bsr	putb		| Write word if now full
+Xx1:	tstl	d6		| Output following bits
+X	bne	x3
+X
+Xoutput1:addw	d3,d3		| Scale up low
+X	bmi	output3		| See if one should be output
+X	addw	d4,d4		| Scale up high
+X	addqw	#1,d4
+X	bpl	output0		| See if zero should be output
+X
+Xoutput2:cmpw	#0xc000,d4	| See if "middle" should be output
+X	bge	output5
+X	cmpw	#0x4000,d3
+X	blt	output5
+X
+X	addl	#1,d6		| Increment number of bits that follow
+X	subw	#0x4000,d3	| Subtract quarter from low and high
+X	subw	#0x4000,d4
+X	bra	output1
+X
+Xoutput3:addw	d4,d4		| Scale up high
+X	addqw	#1,d4
+X
+Xoutput4:movew	d7,cc		| Put one in buffer
+X	addxw	d2,d2
+X	bcs	x4
+Xx6:	tstl	d6		| Output following bits
+X	beq	output1
+X	subl	#1,d6
+X	addw	d2,d2		| Put zero in buffer
+X	bcc	x6
+Xx4:	bsr	putb		| Write word if now full
+X	bra	x6
+X
+Xoutput5:cmpw	#2*EOF,d5	| Check if EOF has just been output
+X	bne	update
+X
+X	addl	#1,d6		| Output termination bits
+X	cmpw	#0x4000,d3
+X	blt	output6
+X	movew	d7,cc		| Put one in buffer
+X	addxw	d2,d2
+X	bcs	x7
+Xx9:	tstl	d6		| Output following bits
+X	beq	finish
+X	subl	#1,d6
+X	addw	d2,d2		| Put zero in buffer
+X	bcc	x9
+Xx7:	bsr	putb		| Write word if now full
+X	bra	x9
+Xoutput6:addw	d2,d2		| Put zero in buffer
+X	bcc	x10
+X	bra	x11
+Xx12:	subl	#1,d6
+X	movew	d7,cc		| Put one in buffer
+X	addxw	d2,d2
+X	bcc	x10
+Xx11:	bsr	putb		| Write word if now full
+Xx10:	tstl	d6		| Output following bits
+X	bne	x12
+X	bra	finish
+X
+X
+X| UPDATE THE MODEL.
+X
+Xupdate0:clrw	d0		| Clear new cumulative count
+X	lea	freq,a1
+X	lea	a1@(2*(nsym+1)),a0 | Pointer for scanning frequencies
+Xupdate1:movew	a0@-,d1		| Scale frequency
+X	addqw	#1,d1
+X	asrw	#1,d1
+X	movew	d1,a0@
+X	movew	d0,a0@(cumf-freq)| Set cumulative frequency
+X	addw	d1,d0		| Add to cumulative frequency
+X	cmpl	a0,a1
+X	bne	update1
+X	bra	update2
+X
+Xupdate:	
+X	cmpw	#maxf,a6@	| See if counts must be scaled down
+X	beq	update0
+X
+Xupdate2:lea	freq,a1		| a1 = freq+d5 for awhile
+X	addw	d5,a1
+X	movew	a1@+,d0
+X	cmpw	a1@,d0		| See if symbol must move
+X	bne	update4
+X
+X	movew	d5,d7		| Find new index for symbol
+Xupdate3:subqw	#2,d5
+X	movew	a1@-,d0
+X	cmpw	a1@(-2),d0
+X	beq	update3
+X
+X	lea	itoc,a0		| Exchange symbols
+X	movew	a0@(0,d7:w),d0
+X	movew	a0@(0,d5:w),d1
+X	movew	d0,a0@(0,d5:w)
+X	movew	d1,a0@(0,d7:w)
+X	lea	ctoi,a0
+X	movew	d5,a0@(0,d0:w)
+X	movew	d7,a0@(0,d1:w)
+X
+Xupdate4:addqw	#1,a1@		| Update frequency
+X
+X	movel	a6,a0
+X	lea	update5,a1
+X	subw	d5,a1
+X	jmp	a1@
+X
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X	addqw	#1,a0@+
+X
+Xupdate5:addqw	#1,a0@
+X
+X	bra	main_loop
+X
+X
+X| FINISH WITH STUFF.
+X
+Xfinish:
+Xfinish0:addw	d2,d2		| Fill last word with zeros
+X	bcc	finish0
+X	movew	d2,a2@+
+X
+X	lea	obuf,a0		| Write buffer
+X	subl	a0,a2
+X	movel	a2,sp@-
+X	movel	a0,sp@-
+X	movel	#1,sp@-
+X	jsr	_write
+X	addl	#12,sp
+X
+X	moveml	sp@+,a2-a6/d2-d7
+X	rts
+END_OF_FILE
+if test 9807 -ne `wc -c <'encode.s'`; then
+    echo shar: \"'encode.s'\" unpacked with wrong size!
+fi
+# end of 'encode.s'
+fi
+if test -f 'makefile' -a "${1}" != "-c" ; then 
+  echo shar: Will not clobber existing file \"'makefile'\"
+else
+echo shar: Extracting \"'makefile'\" \(260 characters\)
+sed "s/^X//" >'makefile' <<'END_OF_FILE'
+Xall:	encode decode
+X
+Xencode:	encode.o driver.o
+X	cc driver.o encode.o -o encode
+Xdecode:	decode.o driver.o
+X	cc driver.o decode.o -o decode
+X
+Xencode.o:	encode.s
+X	as encode.s -o encode.o
+Xdecode.o:	decode.s
+X	as decode.s -o decode.o
+Xdriver.o:	driver.c
+X	cc -c driver.c
+END_OF_FILE
+if test 260 -ne `wc -c <'makefile'`; then
+    echo shar: \"'makefile'\" unpacked with wrong size!
+fi
+# end of 'makefile'
+fi
+echo shar: End of shell archive.
+exit 0

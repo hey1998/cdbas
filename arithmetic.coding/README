@@ -1,0 +1,41 @@
+Welcome to the Calgary arithmetic coding corner.  Here is the code for
+arithmetic coding and decoding that was published in
+
+	Witten, I.H., Neal, R. and Cleary, J.G. (1987) ``Arithmetic coding for
+	data compression,'' Comm ACM: 30(6): 520-540; June;
+
+for further discussion, see also
+
+	Witten, I.H., Neal, R. and Cleary, J.G. (1988) ``Compress and compact
+	discussed further,'' Comm ACM: 31(9): 1140, 1145; September (reply to a
+	letter to the editor).
+
+The code is also described in the book
+
+	Bell, T.C., Cleary, J.G. and Witten, I.H. Text compression.
+	Prentice Hall, Englewood Cliffs, NJ, 1990.
+
+There are three versions, each residing in a shar file in this directory:
+
+    cacm-87.shar     The C code that was printed in the Comm ACM 1987 article
+    fast-c.shar      The optimized C version that was mentioned in the article
+    sun-assem.shar   An even faster version in 68000 assembly language.
+
+Radford Neal has produced a new, experimental, version of the arithmetic coding
+code that uses low precision division instead of the standard divide routine.
+It resides as a shar archive in the subdirectory low.precision.version, and
+includes its own README file.
+
+This is take-it-or-leave-it code -- we don't have the resources to get involved
+in helping you sort out technical problems.  However, we do know that lots of
+people are using the cacm-87 code without problems.
+
+Good luck!
+
+Ian H. Witten				Radford Neal
+Computer Science Department		Department of Computer Science
+University of Calgary			University of Toronto
+Calgary T2N 1N4, Canada			Toronto M5S 1A7, Canada
+Phone (403) 220-6780			
+email: ian@cpsc.UCalgary.CA		email: radford@ai.toronto.EDU
+
